@@ -34,8 +34,6 @@ def enforce_constraints(
                 break
 
         new_days.append(ItineraryDay(day=d.day, objective=d.objective, items=items))
-        if total >= max_total_links:
-            break
 
     plan.itinerary = new_days
     return plan
