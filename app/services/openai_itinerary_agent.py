@@ -57,13 +57,19 @@ def _tool_schema_fetch_page() -> dict:
 
 def _as_dict(item: Any) -> Dict[str, Any]:
     if isinstance(item, dict):
-        return item
-    if hasattr(item, "model_dump"):
-        return item.model_dump()
-    d: Dict[str, Any] = {}
-    for k in ("type", "name", "arguments", "call_id", "content", "role"):
-        if hasattr(item, k):
-            d[k] = getattr(item, k)
+        d = dict(item)
+    elif hasattr(item, "model_dump"):
+        d = item.model_dump()
+    else:
+        d = {}
+        for k in ("type", "name", "arguments", "call_id", "role", "content"):
+            if hasattr(item, k):
+                d[k] = getattr(item, k)
+
+    d.pop("parsed_arguments", None)
+    d.pop("parsed", None)
+    d.pop("parsed_output", None)
+
     return d
 
 def _extract_function_calls(resp: Any) -> List[Dict[str, Any]]:
@@ -76,7 +82,32 @@ def _extract_function_calls(resp: Any) -> List[Dict[str, Any]]:
 
 def _append_response_output_to_input(input_list: List[Dict[str, Any]], resp: Any) -> None:
     for item in getattr(resp, "output", []) or []:
-        input_list.append(_as_dict(item))
+        d = _as_dict(item)
+        t = d.get("type")
+
+        if t == "function_call":
+            # Only keep the keys the API expects
+            input_list.append(
+                {
+                    "type": "function_call",
+                    "call_id": d.get("call_id"),
+                    "name": d.get("name"),
+                    "arguments": d.get("arguments"),
+                }
+            )
+
+        elif t == "function_call_output":
+            input_list.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": d.get("call_id"),
+                    "output": d.get("output"),
+                }
+            )
+
+        elif "role" in d and "content" in d:
+            # Optional: keep message-like output minimal
+            input_list.append({"role": d.get("role"), "content": d.get("content")})
 
 def _make_function_call_output(call_id: str, output_obj: Dict[str, Any]) -> Dict[str, Any]:
     return {
@@ -142,7 +173,7 @@ Return ONLY JSON that matches the schema.
         max_tool_calls=settings.max_tool_calls,
     )
 
-    # Execute custom function tool calls if any (web_search is handled by OpenAI)
+    # Tool loop (web_search handled by OpenAI; function_call handled by us)
     for _ in range(8):
         function_calls = _extract_function_calls(resp)
         if not function_calls:
